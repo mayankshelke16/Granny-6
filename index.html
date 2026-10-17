@@ -1,0 +1,514 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Granny 6 - Horror Estate</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#050505;color:white;font-family:Arial,sans-serif}
+canvas{display:block}
+#hud{position:fixed;top:15px;left:15px;z-index:5;background:#000b;padding:12px 16px;border:1px solid #733;border-radius:8px;line-height:1.7}
+#help{position:fixed;bottom:15px;left:15px;z-index:5;background:#000b;padding:10px;border-radius:8px;font-size:13px}
+#crosshair{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:white;font-size:22px;z-index:4;pointer-events:none}
+#screen{position:fixed;inset:0;background:radial-gradient(#252525,#000);display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:10;text-align:center;padding:20px}
+#screen h1{font-size:clamp(36px,7vw,72px);color:#e22;text-shadow:0 0 22px #900;margin:0 0 10px}
+#screen p{max-width:550px;line-height:1.6;color:#ddd}
+button{background:#a00;color:white;border:0;border-radius:6px;padding:13px 25px;font-weight:bold;cursor:pointer;font-size:16px}
+button:hover{background:#e22}
+#message{color:#ff6666;font-weight:bold}
+#mobile{position:fixed;right:15px;bottom:15px;z-index:6;display:none;gap:8px;flex-wrap:wrap;width:180px}
+#mobile button{padding:13px;background:#222c;border:1px solid #888;min-width:50px}
+@media(max-width:800px){#mobile{display:flex}#help{max-width:55%;font-size:11px}}
+</style>
+</head>
+<body>
+<div id="hud">
+  <b>GRANNY 6: HORROR ESTATE</b><br>
+  Keys: <span id="keys">0 / 3</span><br>
+  Flashlight: <span id="torchStatus">ON</span><br>
+  Threat: <span id="threat">Searching...</span><br>
+  <span id="message">Find 3 keys and escape!</span>
+</div>
+<div id="crosshair">+</div>
+<div id="help">
+  <b>Controls</b><br>
+  W A S D — Move<br>
+  Mouse — Look around<br>
+  F — Flashlight<br>
+  SHIFT — Run<br>
+  E — Collect key / Escape<br>
+  ESC — Release mouse
+</div>
+<div id="mobile">
+  <button data-key="w">▲</button>
+  <button data-key="a">◀</button>
+  <button data-key="s">▼</button>
+  <button data-key="d">▶</button>
+  <button id="mobileTorch">Flashlight</button>
+  <button id="mobileRun">Run</button>
+</div>
+<div id="screen">
+  <h1>GRANNY 6</h1>
+  <p>Six horrors are hunting you inside the dark estate.<br>
+  Find three keys. Avoid the enemies. Escape alive.</p>
+  <p>Granny • Grandpa • Slendrina • Nosferatu • Slenderman • Angelina</p>
+  <button id="start">ENTER THE ESTATE</button>
+  <p style="font-size:12px">Fan-made browser horror game</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(() => {
+"use strict";
+
+const $ = id => document.getElementById(id);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x08090d);
+scene.fog = new THREE.FogExp2(0x08090d, 0.022);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 180);
+camera.rotation.order = "YXZ";
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0x8a9bbd, 0x17100b, 1.0));
+const moon = new THREE.DirectionalLight(0x9eaccb, 1.2);
+moon.position.set(-12,22,8);
+moon.castShadow = true;
+scene.add(moon);
+
+const flashlight = new THREE.SpotLight(0xfff0d5, 100, 24, Math.PI/7, 0.55, 1.3);
+flashlight.position.set(0,0,0);
+camera.add(flashlight);
+camera.add(flashlight.target);
+flashlight.target.position.set(0,0,-8);
+const flashlightFill = new THREE.PointLight(0xffdfad, 2.5, 8);
+camera.add(flashlightFill);
+scene.add(camera);
+
+const mat = (color, roughness=0.9, extra={}) =>
+  new THREE.MeshStandardMaterial({color,roughness,...extra});
+
+const materials = {
+  wall:mat(0x51483e),
+  floor:mat(0x30251c),
+  wood:mat(0x493023),
+  darkWood:mat(0x211813),
+  metal:mat(0x5e6267,0.4, {metalness:0.65}),
+  skin:mat(0xb99b82),
+  black:mat(0x09090b),
+  white:mat(0xe4dfd1),
+  red:mat(0x9e090b),
+  blood:mat(0x650509)
+};
+
+function box(parent, x,y,z, sx,sy,sz, material, cast=true) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),material);
+  mesh.position.set(x,y,z);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+function sphere(parent,x,y,z,sx,sy,sz,material) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1,16,12),material);
+  mesh.position.set(x,y,z);
+  mesh.scale.set(sx,sy,sz);
+  mesh.castShadow=true;
+  parent.add(mesh);
+  return mesh;
+}
+
+const world = new THREE.Group();
+scene.add(world);
+const colliders = [];
+function wall(x,y,z,sx,sy,sz) {
+  box(world,x,y,z,sx,sy,sz,materials.wall);
+  colliders.push({x,z,hx:sx/2,hz:sz/2});
+}
+
+// Mansion floor and ceiling
+box(world,0,-0.25,0,44,0.5,44,materials.floor);
+box(world,0,5,0,44,0.4,44,materials.darkWood,false);
+wall(0,2.3,-22,44,5,0.5);
+wall(0,2.3,22,44,5,0.5);
+wall(-22,2.3,0,0.5,5,44);
+wall(22,2.3,0,0.5,5,44);
+
+// Internal corridors and rooms; gaps serve as doorways.
+wall(-8,2.3,-13,0.45,5,15);
+wall(8,2.3,-13,0.45,5,15);
+wall(0,2.3,-8,12,5,0.4);
+wall(-8,2.3,8,0.45,5,15);
+wall(8,2.3,8,0.45,5,15);
+wall(0,2.3,13,12,5,0.4);
+wall(-15,2.3,0,0.4,5,9);
+wall(15,2.3,0,0.4,5,9);
+
+// Furniture
+function makeBed(x,z) {
+  box(world,x,0.5,z,3.4,0.45,4,materials.darkWood);
+  box(world,x,0.8,z,3.1,0.25,3.7,mat(0x61505a));
+  box(world,x,0.98,z-1.3,3,0.18,1,mat(0xbcb4a6));
+}
+function makeTable(x,z) {
+  box(world,x,1.3,z,2.3,0.18,1.4,materials.wood);
+  for(const dx of [-0.9,0.9]) for(const dz of [-0.5,0.5])
+    box(world,x+dx,0.65,z+dz,0.16,1.3,0.16,materials.darkWood);
+}
+makeBed(-14,-15); makeBed(14,-15);
+makeBed(-14,15); makeBed(14,15);
+makeTable(-13,-3); makeTable(13,4); makeTable(0,17);
+box(world,-17,1.2,-5,1.2,2.4,1.2,materials.darkWood);
+box(world,17,1.2,8,1.2,2.4,1.2,materials.darkWood);
+
+// Flickering-looking warm lights
+for(const p of [[-14,3,-13],[14,3,-13],[-14,3,13],[14,3,13],[0,3,0]]) {
+  const lamp = new THREE.PointLight(0xffb66b, 2.2, 10);
+  lamp.position.set(...p);
+  scene.add(lamp);
+  sphere(world,p[0],4.65,p[2],0.17,0.2,0.17,mat(0xffc36b,0.3,{emissive:0xff7800,emissiveIntensity:0.7}));
+}
+
+// Doorway / exit
+const exit = new THREE.Group();
+exit.position.set(0,0,-21.65);
+scene.add(exit);
+box(exit,0,1.7,0,3.5,3.4,0.35,materials.darkWood);
+box(exit,0,1.7,0.04,2.8,3.0,0.12,mat(0x402519));
+sphere(exit,1,1.5,-0.05,0.08,0.08,0.08,mat(0xd4b35c,0.25,{metalness:0.6}));
+
+// Player
+const player = {x:0,y:1.65,z:17,yaw:0,pitch:0,speed:4.1};
+camera.position.set(player.x,player.y,player.z);
+
+const pressed = {};
+let running=false, torchOn=true, started=false, ended=false;
+let keysCollected=0;
+const keys = [];
+const enemies = [];
+const clock = new THREE.Clock();
+
+function makeKey(x,z) {
+  const group = new THREE.Group();
+  group.position.set(x,0.6,z);
+  const gold = mat(0xffc83d,0.25,{metalness:0.7,emissive:0x4c2600});
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16,0.045,8,18),gold);
+  group.add(ring);
+  box(group,0.2,0,0,0.32,0.07,0.07,gold);
+  box(group,0.3,-0.07,0,0.06,0.13,0.07,gold);
+  scene.add(group);
+  keys.push(group);
+}
+makeKey(-14,-15);
+makeKey(14,14);
+makeKey(0,-15);
+
+// Character construction
+function makeEnemy(name, color, clothes, x,z, options={}) {
+  const root = new THREE.Group();
+  root.position.set(x,0,z);
+  scene.add(root);
+
+  const skin = mat(color);
+  const outfit = mat(clothes);
+  const dark = mat(0x120e10);
+  const eyeMat = mat(options.glowing ? 0xff2222 : 0xe8dfcc,0.3,
+    options.glowing ? {emissive:0xff0000,emissiveIntensity:1.7} : {});
+  const body = box(root,0,1.15,0,0.75,1.0,0.42,outfit);
+  sphere(root,0,1.95,0,0.35,0.4,0.32,skin);
+  // Hair / head covering
+  if(name==="Granny") sphere(root,0,2.17,0,0.37,0.22,0.34,mat(0xddddcf));
+  if(name==="Grandpa") sphere(root,0,2.18,0,0.37,0.17,0.34,mat(0x77736b));
+  if(name==="Slendrina") sphere(root,0,2.2,0,0.37,0.2,0.34,mat(0x161318));
+  if(name==="Nosferatu") {
+    sphere(root,0,2.19,0,0.39,0.25,0.35,mat(0x302c30));
+    // Fangs
+    for(const side of [-1,1]) {
+      const fang = new THREE.Mesh(new THREE.ConeGeometry(0.055,0.19,8),materials.white);
+      fang.position.set(side*0.1,1.78,-0.29);
+      fang.rotation.x=Math.PI;
+      root.add(fang);
+    }
+  }
+  if(name==="Slenderman") {
+    // Pale, nearly featureless head
+    sphere(root,0,1.95,0,0.34,0.43,0.32,mat(0xd7d4cc));
+    box(root,0,1.12,0,0.78,1.05,0.43,mat(0x101116));
+    box(root,0,1.5,-0.23,0.1,0.65,0.05,mat(0xeeeeea));
+  }
+  if(name==="Angelina") sphere(root,0,2.2,0,0.37,0.2,0.34,mat(0x3a171c));
+
+  // Face looks toward -Z
+  const headY = name==="Slenderman" ? 1.95 : 1.95;
+  if(name!=="Slenderman") {
+    for(const side of [-1,1]) {
+      sphere(root,side*0.13,headY+0.03,-0.292,0.075,0.085,0.035,dark);
+      sphere(root,side*0.13,headY+0.03,-0.323,0.04,0.045,0.022,eyeMat);
+      box(root,side*0.13,headY+0.14,-0.3,0.13,0.035,0.035,dark);
+    }
+    sphere(root,0,headY-0.07,-0.32,0.055,0.08,0.055,skin);
+    box(root,0,headY-0.19,-0.315,0.16,0.035,0.025,mat(0x2b080b));
+  } else {
+    for(const side of [-1,1])
+      sphere(root,side*0.12,headY+0.04,-0.3,0.045,0.055,0.025,mat(0x080808));
+  }
+
+  // Arms and legs
+  for(const side of [-1,1]) {
+    const arm = box(root,side*0.48,1.18,0,0.18,0.85,0.2,skin);
+    arm.rotation.z=side*0.08;
+    box(root,side*0.22,0.35,0,0.24,0.7,0.25,dark);
+    box(root,side*0.22,0.06,-0.06,0.32,0.13,0.43,materials.black);
+  }
+
+  // Floating label: name above a downward arrow.
+  const label = new THREE.Group();
+  label.position.set(0,3.15,0);
+  root.add(label);
+
+  const canvas = document.createElement("canvas");
+  canvas.width=512; canvas.height=128;
+  const ctx=canvas.getContext("2d");
+  ctx.font="bold 54px Arial";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.lineJoin="round";
+  ctx.lineWidth=10;
+  ctx.strokeStyle="#000000";
+  ctx.strokeText(name,256,64);
+  ctx.fillStyle="#ff2828";
+  ctx.fillText(name,256,64);
+
+  const texture=new THREE.CanvasTexture(canvas);
+  texture.colorSpace=THREE.SRGBColorSpace;
+  const sprite=new THREE.Sprite(new THREE.SpriteMaterial({
+    map:texture,transparent:true,depthTest:false,depthWrite:false
+  }));
+  sprite.scale.set(2.5,0.63,1);
+  sprite.position.y=0.42;
+  label.add(sprite);
+
+  const arrowMat=new THREE.MeshBasicMaterial({
+    color:0xff1616,depthTest:false,depthWrite:false
+  });
+  const arrow=new THREE.Mesh(new THREE.ConeGeometry(0.15,0.35,8),arrowMat);
+  arrow.rotation.x=Math.PI;
+  arrow.position.y=0;
+  label.add(arrow);
+
+  // Make name labels face the player from every direction.
+  label.userData.billboard=true;
+
+  enemies.push({
+    name,root,label,x,z,homeX:x,homeZ:z,
+    speed:options.speed||1.1,
+    chaseRange:options.chaseRange||10,
+    phase:Math.random()*10,
+    attackDistance:1.15
+  });
+}
+
+makeEnemy("Granny",0xbfa18b,0x762024,-15,0,{speed:1.35,chaseRange:12});
+makeEnemy("Grandpa",0x9d8b75,0x51443a,15,0,{speed:1.15,chaseRange:10});
+makeEnemy("Slendrina",0xe3d4ce,0x211a2a,-14,-17,{speed:1.65,chaseRange:13,glowing:true});
+makeEnemy("Nosferatu",0x99918a,0x30252b,14,-17,{speed:1.45,chaseRange:11,glowing:true});
+makeEnemy("Slenderman",0xcfcfc7,0x111319,-14,17,{speed:1.8,chaseRange:14});
+makeEnemy("Angelina",0xdab49e,0x651827,14,17,{speed:1.55,chaseRange:12,glowing:true});
+
+// Keep characters from walking through the perimeter and partitions.
+function blocked(x,z,r=0.45) {
+  if(x < -21 || x > 21 || z < -21 || z > 21) return true;
+  for(const c of colliders) {
+    if(Math.abs(x-c.x)<c.hx+r && Math.abs(z-c.z)<c.hz+r) return true;
+  }
+  return false;
+}
+function moveEnemy(enemy,dx,dz) {
+  const nx=enemy.root.position.x+dx;
+  const nz=enemy.root.position.z+dz;
+  if(!blocked(nx,enemy.root.position.z,0.35)) enemy.root.position.x=nx;
+  if(!blocked(enemy.root.position.x,nz,0.35)) enemy.root.position.z=nz;
+}
+
+function updateEnemy(enemy,dt,t) {
+  const e=enemy.root.position;
+  const dx=player.x-e.x, dz=player.z-e.z;
+  const distance=Math.hypot(dx,dz);
+  let vx=0,vz=0;
+
+  if(distance<enemy.chaseRange) {
+    vx=dx/(distance||1);
+    vz=dz/(distance||1);
+  } else {
+    vx=Math.sin(t*0.42+enemy.phase)*0.55;
+    vz=Math.cos(t*0.36+enemy.phase)*0.55;
+  }
+
+  const len=Math.hypot(vx,vz)||1;
+  moveEnemy(enemy,vx/len*enemy.speed*dt,vz/len*enemy.speed*dt);
+
+  // Face the direction of travel.
+  if(Math.abs(vx)+Math.abs(vz)>0.01)
+    enemy.root.rotation.y=Math.atan2(-vx,-vz);
+
+  // Floating labels face the camera.
+  enemy.label.quaternion.copy(camera.quaternion);
+
+  if(distance<enemy.attackDistance && !ended) {
+    ended=true;
+    showEnd("YOU WERE CAUGHT","The estate has claimed another victim press esc to release mouse.")
+  }
+}
+
+function showEnd(title,detail) {
+  $("screen").style.display="flex";
+  $("screen").innerHTML=
+    `<h1>${title}</h1><p>${detail}</p><button onclick="location.reload()">PLAY AGAIN</button>`;
+}
+
+function tryInteract() {
+  let closest=null, closestD=2.3;
+  for(const key of keys) {
+    if(!key.visible) continue;
+    const d=Math.hypot(key.position.x-player.x,key.position.z-player.z);
+    if(d<closestD) {closest=key;closestD=d;}
+  }
+  if(closest) {
+    closest.visible=false;
+    keysCollected++;
+    $("keys").textContent=keysCollected+" / 3";
+    $("message").textContent="Key collected!";
+    if(keysCollected===3) $("message").textContent="All keys found! Reach the exit!";
+    return;
+  }
+  if(Math.hypot(player.x,player.z+21.65)<3) {
+    if(keysCollected===3) {
+      ended=true;
+      showEnd("YOU ESCAPED","You survived the Horror Estate.");
+    } else {
+      $("message").textContent="The exit is locked. Find all 3 keys!";
+    }
+  }
+}
+
+function setTorch() {
+  torchOn=!torchOn;
+  flashlight.visible=torchOn;
+  flashlightFill.visible=torchOn;
+  $("torchStatus").textContent=torchOn?"ON":"OFF";
+}
+
+function updatePlayer(dt) {
+  const forward=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
+  const right=new THREE.Vector3(Math.cos(player.yaw),0,-Math.sin(player.yaw));
+  const movement=new THREE.Vector3();
+
+  if(pressed.w) movement.add(forward);
+  if(pressed.s) movement.sub(forward);
+  if(pressed.d) movement.add(right);
+  if(pressed.a) movement.sub(right);
+
+  if(movement.lengthSq()>0) {
+    movement.normalize();
+    const speed=player.speed*(pressed.Shift?1.65:1);
+    const dx=movement.x*speed*dt;
+    const dz=movement.z*speed*dt;
+    if(!blocked(player.x+dx,player.z,0.35)) player.x+=dx;
+    if(!blocked(player.x,player.z+dz,0.35)) player.z+=dz;
+  }
+
+  camera.position.set(player.x,player.y,player.z);
+  camera.rotation.set(player.pitch,player.yaw,0,"YXZ");
+}
+
+function updateHUD() {
+  let closest=Infinity;
+  for(const e of enemies) {
+    closest=Math.min(closest,Math.hypot(e.root.position.x-player.x,e.root.position.z-player.z));
+  }
+  $("threat").textContent=closest<5?"VERY CLOSE!":closest<10?"Nearby":"Far away";
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt=Math.min(clock.getDelta(),0.04);
+  const t=clock.elapsedTime;
+
+  if(started&&!ended) {
+    updatePlayer(dt);
+    for(const key of keys) if(key.visible) {
+      key.rotation.y+=dt*1.5;
+      key.position.y=0.6+Math.sin(t*2+key.position.x)*0.12;
+    }
+    for(const enemy of enemies) updateEnemy(enemy,dt,t);
+    updateHUD();
+  }
+  renderer.render(scene,camera);
+}
+animate();
+
+// Controls
+addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  if(["w","a","s","d"," "].includes(k)) e.preventDefault();
+  pressed[k==="shift"?"Shift":k]=true;
+  if(k==="f") setTorch();
+  if(k==="e"&&started&&!ended) tryInteract();
+});
+addEventListener("keyup",e=>{
+  const k=e.key.toLowerCase();
+  pressed[k==="shift"?"Shift":k]=false;
+});
+
+renderer.domElement.addEventListener("click",()=>{
+  if(started&&!ended && document.pointerLockElement!==renderer.domElement)
+    renderer.domElement.requestPointerLock();
+});
+document.addEventListener("mousemove",e=>{
+  if(document.pointerLockElement===renderer.domElement&&started&&!ended) {
+    player.yaw-=e.movementX*0.0022;
+    player.pitch-=e.movementY*0.0022;
+    player.pitch=Math.max(-1.45,Math.min(1.45,player.pitch));
+  }
+});
+
+$("start").addEventListener("click",()=>{
+  started=true;
+  $("screen").style.display="none";
+  renderer.domElement.requestPointerLock();
+});
+
+// Mobile controls
+document.querySelectorAll("[data-key]").forEach(button=>{
+  const k=button.dataset.key;
+  const down=e=>{e.preventDefault();pressed[k]=true;};
+  const up=e=>{e.preventDefault();pressed[k]=false;};
+  button.addEventListener("pointerdown",down);
+  button.addEventListener("pointerup",up);
+  button.addEventListener("pointerleave",up);
+  button.addEventListener("pointercancel",up);
+});
+$("mobileTorch").addEventListener("click",setTorch);
+$("mobileRun").addEventListener("pointerdown",()=>pressed.Shift=true);
+$("mobileRun").addEventListener("pointerup",()=>pressed.Shift=false);
+$("mobileRun").addEventListener("pointerleave",()=>pressed.Shift=false);
+
+addEventListener("resize",()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+})();
+</script>
+</body>
+</html>
